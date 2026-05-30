@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -11,6 +10,7 @@ use crate::audio::{
     ClipSource, DeviceOption, DownloadedClip, DEFAULT_DEVICE_NAME,
 };
 use crate::config::AppConfig;
+use crate::playback::Player;
 use crate::ui::{activity_view, clips_view, main_view, settings_view};
 
 pub fn run() -> iced::Result {
@@ -49,6 +49,7 @@ pub fn run() -> iced::Result {
                     clips: Vec::new(),
                     clips_status: "Not loaded".into(),
                     active_clip: None,
+                    player: Player::new(),
                 },
                 open_main.discard(),
             )
@@ -67,6 +68,7 @@ pub enum Message {
     CloseClips,
     RefreshClips,
     OpenClip(String),
+    StopPlayback,
     ClipOpened(Result<DownloadedClip, String>),
     ClipsLoaded(Result<Vec<ClipInfo>, String>),
     WindowCloseRequested(window::Id),
@@ -101,6 +103,7 @@ pub struct AudioFriend {
     pub clips: Vec<ClipInfo>,
     pub clips_status: String,
     pub active_clip: Option<ClipInfo>,
+    pub player: Player,
 }
 
 fn title(_state: &AudioFriend, id: window::Id) -> String {
@@ -223,36 +226,36 @@ fn update(state: &mut AudioFriend, message: Message) -> Task<Message> {
                 return Task::none();
             }
 
-            state.clips_status = format!("Opening {key}...");
+            // Reuse a previous download if this clip is already in the temp dir.
+            let cached = cached_clip_path(&key);
+            if cached.exists() {
+                state.player.play(key.clone(), cached);
+                state.clips_status = format!("Playing {key}");
+                push_activity(&mut state.activity_log, format!("Playing clip: {key}"));
+                return Task::none();
+            }
+
+            state.clips_status = format!("Loading {key}...");
             let config = state.config.s3.clone();
             Task::perform(
                 async move { download_clip(&config, &key).await.map_err(|err| err.to_string()) },
                 Message::ClipOpened,
             )
         }
+        Message::StopPlayback => {
+            state.player.stop();
+            state.clips_status = "Stopped playback".into();
+            Task::none()
+        }
         Message::ClipOpened(result) => {
             match result {
                 Ok(downloaded) => {
-                    state.clips_status = format!("Opened {}", downloaded.key);
+                    state.player.play(downloaded.key.clone(), downloaded.file_path.clone());
+                    state.clips_status = format!("Playing {}", downloaded.key);
                     push_activity(
                         &mut state.activity_log,
-                        format!("Downloaded clip to {}", downloaded.file_path.display()),
+                        format!("Playing clip: {}", downloaded.key),
                     );
-                    match open_with_system_player(&downloaded.file_path) {
-                        Ok(()) => {
-                            push_activity(
-                                &mut state.activity_log,
-                                format!("Opened clip in system player: {}", downloaded.key),
-                            );
-                        }
-                        Err(err) => {
-                            state.clips_status = format!("Downloaded clip, but failed to open: {err}");
-                            push_activity(
-                                &mut state.activity_log,
-                                format!("Clip open failed: {err}"),
-                            );
-                        }
-                    }
                 }
                 Err(err) => {
                     state.clips_status = format!("Failed to open clip: {err}");
@@ -413,12 +416,13 @@ fn validate_settings(config: &AppConfig) -> Option<String> {
     None
 }
 
-fn open_with_system_player(path: &std::path::Path) -> Result<(), String> {
-    Command::new("xdg-open")
-        .arg(path)
-        .spawn()
-        .map(|_| ())
-        .map_err(|err| err.to_string())
+/// Temp-dir path that `download_clip` writes a given clip key to, so we can
+/// reuse an earlier download instead of fetching it again.
+fn cached_clip_path(key: &str) -> std::path::PathBuf {
+    let file_name = key.rsplit('/').next().unwrap_or("clip.wav");
+    let mut path = std::env::temp_dir();
+    path.push(file_name);
+    path
 }
 
 fn view(state: &AudioFriend, id: window::Id) -> Element<'_, Message> {

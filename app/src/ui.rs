@@ -1,7 +1,7 @@
 use iced::alignment::Alignment;
 use iced::border;
 use iced::widget::{
-    button, column, container, mouse_area, pick_list, progress_bar, row, scrollable, slider, stack, text,
+    button, column, container, pick_list, progress_bar, row, scrollable, slider, stack, text,
     text_input,
 };
 use iced::{Background, Color, Element, Length, Theme};
@@ -166,16 +166,27 @@ pub fn clips_view(state: &AudioFriend) -> Element<'_, Message> {
     if state.clips.is_empty() && state.active_clip.is_none() {
         entries = entries.push(text(&state.clips_status).size(14));
     } else {
+        let now_playing = state.player.now_playing();
         for clip in &state.clips {
-            entries = entries.push(
-                mouse_area(settings_card(column![
-                    text(&clip.key).size(15),
-                    text(format!("State: {}", clip_source_label(&clip.source))).size(13),
-                    text(format!("Modified: {}", clip.last_modified_display)).size(13),
-                    text(format!("Size: {} KB", clip.size_bytes / 1024)).size(13),
-                ]))
-                .on_press(Message::OpenClip(clip.key.clone())),
-            );
+            let is_playing = now_playing.as_deref() == Some(clip.key.as_str());
+            let controls = if is_playing {
+                row![
+                    button(text("Stop")).on_press(Message::StopPlayback),
+                    text("Playing...").size(13),
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center)
+            } else {
+                row![button(text("Play")).on_press(Message::OpenClip(clip.key.clone()))]
+            };
+
+            entries = entries.push(settings_card(column![
+                text(&clip.key).size(15),
+                text(format!("State: {}", clip_source_label(&clip.source))).size(13),
+                text(format!("Modified: {}", clip.last_modified_display)).size(13),
+                text(format!("Size: {} KB", clip.size_bytes / 1024)).size(13),
+                controls,
+            ]));
         }
     }
 

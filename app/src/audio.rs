@@ -112,6 +112,7 @@ impl AudioEngine {
         let sample_format = supported.sample_format();
         let sample_rate = supported.sample_rate().0;
         let stream_config: cpal::StreamConfig = supported.into();
+        let channels = stream_config.channels as usize;
         let amplitude = self.amplitude.clone();
         let detector = self.detector.clone();
 
@@ -124,7 +125,10 @@ impl AudioEngine {
         let stream = match sample_format {
             cpal::SampleFormat::F32 => device.build_input_stream(
                 &stream_config,
-                move |data: &[f32], _| process_input(data, &amplitude, &detector),
+                move |data: &[f32], _| {
+                    let mono = downmix_to_mono(data, channels);
+                    process_input(&mono, &amplitude, &detector)
+                },
                 err_fn,
                 None,
             )?,
@@ -132,7 +136,8 @@ impl AudioEngine {
                 &stream_config,
                 move |data: &[i16], _| {
                     let converted: Vec<f32> = data.iter().map(|s| *s as f32 / i16::MAX as f32).collect();
-                    process_input(&converted, &amplitude, &detector)
+                    let mono = downmix_to_mono(&converted, channels);
+                    process_input(&mono, &amplitude, &detector)
                 },
                 err_fn,
                 None,
@@ -141,7 +146,8 @@ impl AudioEngine {
                 &stream_config,
                 move |data: &[u16], _| {
                     let converted: Vec<f32> = data.iter().map(|s| *s as f32 / u16::MAX as f32 - 0.5).collect();
-                    process_input(&converted, &amplitude, &detector)
+                    let mono = downmix_to_mono(&converted, channels);
+                    process_input(&mono, &amplitude, &detector)
                 },
                 err_fn,
                 None,
@@ -266,6 +272,20 @@ impl AudioEngine {
         }
         Ok(())
     }
+}
+
+/// Collapse interleaved multi-channel frames (e.g. `[L, R, L, R, ...]`) into a
+/// single mono stream by averaging each frame's channels. The capture device's
+/// default config is frequently stereo; without this the interleaved samples are
+/// treated as twice as many mono samples, so the mono WAV plays at half speed and
+/// an octave low.
+fn downmix_to_mono(data: &[f32], channels: usize) -> Vec<f32> {
+    if channels <= 1 {
+        return data.to_vec();
+    }
+    data.chunks(channels)
+        .map(|frame| frame.iter().sum::<f32>() / frame.len() as f32)
+        .collect()
 }
 
 fn process_input(samples: &[f32], amplitude: &Arc<Mutex<f32>>, detector: &Arc<Mutex<Detector>>) {
