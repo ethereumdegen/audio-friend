@@ -1,0 +1,17 @@
+target/
+Cargo.lock
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Env / local config
+.env
+.env.*
